@@ -4,11 +4,6 @@ LWJGL Demo Python Launcher
 
 A Python wrapper for the LWJGL demo that provides easy configuration
 and dynamic testing without rebuilding with Maven.
-
-Usage:
-    python3 lwjgl_launcher.py [options]
-    python3 lwjgl_launcher.py --preset performance
-    python3 lwjgl_launcher.py --width 1920 --height 1080 --fullscreen
 """
 
 import subprocess
@@ -49,48 +44,106 @@ class LWJGLLauncher:
             parts.extend(str(p) for p in self.lib_dir.glob("*.jar"))
         return os.pathsep.join(parts)
     
-    def launch(self, app_args=None):
-        if not self.check_build(): return False
-        cmd = ["java", "-cp", self.build_classpath(), "com.necat.lwjgl.HelloLWJGL"] + (app_args or [])
-        print(f"🚀 Launching: {' '.join(app_args) if app_args else '(defaults)'}")
-        try:
-            subprocess.run(cmd, cwd=self.project_dir)
+    def launch(self, java_args=None, app_args=None, dry_run=False):
+        if java_args is None: java_args = []
+        if app_args is None: app_args = []
+        
+        if not dry_run and not self.check_build():
+            return False
+        
+        classpath = self.build_classpath()
+        cmd = ["java", "-cp", classpath] + java_args + ["com.necat.lwjgl.HelloLWJGL"] + app_args
+        
+        if dry_run:
+            print("🔍 DRY RUN MODE - Command that would be executed:")
+            print("=" * 70)
+            print(" ".join(cmd))
+            print("=" * 70)
+            print("\nClasspath entries:")
+            for i, entry in enumerate(classpath.split(os.pathsep), 1):
+                exists = "✓" if Path(entry).exists() else "✗"
+                print(f"  {i}. [{exists}] {entry}")
+            print()
             return True
+        
+        print("🚀 Launching LWJGL Demo...")
+        print(f"   Args: {' '.join(app_args) if app_args else '(none)'}\n")
+        
+        try:
+            process = subprocess.Popen(cmd, cwd=self.project_dir, stdout=subprocess.PIPE, 
+                                     stderr=subprocess.STDOUT, text=True, bufsize=1)
+            for line in process.stdout:
+                print(line, end='')
+            process.wait()
+            return process.returncode == 0
         except KeyboardInterrupt:
-            print("\n⚠️  Interrupted"); return False
+            print("\n\n⚠️  Interrupted by user")
+            process.terminate()
+            return False
+        except Exception as e:
+            print(f"\n❌ Error launching: {e}")
+            return False
     
     def list_presets(self):
-        print("Available presets:"); print("=" * 60)
+        print("Available presets:\n" + "=" * 60)
         for name, config in self.presets.items():
-            print(f"\n{name}:"); [print(f"  --{k} {v}") for k, v in config.items()]
+            print(f"\n{name}:")
+            for k, v in config.items():
+                print(f"  --{k} {v}")
+        print()
     
     def get_preset_args(self, preset_name):
-        if preset_name not in self.presets: return None
+        if preset_name not in self.presets:
+            print(f"❌ Unknown preset: {preset_name}")
+            print(f"Available: {', '.join(self.presets.keys())}")
+            return None
         args = []
         for k, v in self.presets[preset_name].items():
             args.append(f"--{k}")
-            if v is not True: args.append(str(v))
+            if v is not True:
+                args.append(str(v))
         return args
 
 def main():
-    parser = argparse.ArgumentParser(description="LWJGL Demo Launcher")
-    parser.add_argument("--preset", "-p", help="Use preset configuration")
-    parser.add_argument("--list-presets", action="store_true", help="List presets")
-    parser.add_argument("--build-only", action="store_true", help="Only build")
-    args, unknown = parser.parse_known_args()
+    parser = argparse.ArgumentParser(
+        description="LWJGL Demo Python Launcher",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Examples:\n  %(prog)s\n  %(prog)s --preset performance\n  %(prog)s --width 1024 --height 768\n  %(prog)s --dry-run --preset minimal"
+    )
     
+    parser.add_argument("--preset", "-p", help="Use a preset configuration")
+    parser.add_argument("--list-presets", action="store_true", help="List available presets and exit")
+    parser.add_argument("--build-only", action="store_true", help="Only build the project, don't run")
+    parser.add_argument("--dry-run", action="store_true", help="Print command without executing")
+    parser.add_argument("--java-args", nargs=argparse.REMAINDER, help="Additional JVM arguments")
+    parser.add_argument("app_args", nargs=argparse.REMAINDER, help="Arguments for LWJGL application")
+    
+    args, unknown = parser.parse_known_args()
     launcher = LWJGLLauncher()
-    if args.list_presets: launcher.list_presets(); return 0
-    if args.build_only: return 0 if launcher.check_build() else 1
+    
+    if args.list_presets:
+        launcher.list_presets()
+        return 0
+    
+    if args.build_only:
+        return 0 if launcher.check_build() else 1
     
     app_args = []
     if args.preset:
         preset_args = launcher.get_preset_args(args.preset)
-        if not preset_args: return 1
+        if preset_args is None:
+            return 1
         app_args.extend(preset_args)
-    app_args.extend([a for a in unknown if a != "--"])
     
-    return 0 if launcher.launch(app_args) else 1
+    if unknown:
+        app_args.extend([arg for arg in unknown if arg != "--"])
+    
+    if args.app_args:
+        app_args.extend(args.app_args)
+    
+    java_args = args.java_args if args.java_args else []
+    success = launcher.launch(java_args, app_args, dry_run=args.dry_run)
+    return 0 if success else 1
 
 if __name__ == "__main__":
     sys.exit(main())
